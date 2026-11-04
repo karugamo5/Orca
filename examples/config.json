@@ -1,0 +1,6 @@
+{
+  "auto_start": false,
+  "health_check": {"interval_seconds": 300},
+  "queue": {"max_pending": 10},
+  "timeouts": {"connect_seconds": 10, "request_seconds": 120, "health_seconds": 10}
+}

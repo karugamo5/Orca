@@ -1,0 +1,2 @@
+# Preserve verbatim license text, including trailing spaces and heading rulers.
+/third_party/THIRD_PARTY_NOTICES.md -whitespace conflict-marker-size=32

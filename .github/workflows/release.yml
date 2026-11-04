@@ -1,0 +1,61 @@
+name: Release
+run-name: Release Orca ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Orca version to release (MAJOR.MINOR.PATCH, without v)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize publication, including releases of different versions.
+concurrency:
+  group: orca-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    with:
+      commit: ${{ github.sha }}
+      version: ${{ inputs.version }}
+
+  publish:
+    needs: verify
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # Use the workflow revision's helper, never execute the released package
+      # or rebuild target code in this job with write access.
+      - name: Check out release automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download verified release assets from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.sha }}-${{ inputs.version }}
+          path: .test-runs/release-assets
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ORCA_COMMIT: ${{ github.sha }}
+          ORCA_VERSION: ${{ inputs.version }}
+        run: |
+          python3 tools/release.py publish --repository "$GH_REPO" \
+            --commit "$ORCA_COMMIT" --version "$ORCA_VERSION" \
+            --artifacts .test-runs/release-assets

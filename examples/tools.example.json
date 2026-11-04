@@ -1,0 +1,14 @@
+{
+  "tools": [
+    {
+      "id": "generate_text",
+      "description": "文章の生成・要約・情報整理を依頼します",
+      "models": ["all"]
+    },
+    {
+      "id": "generate_code",
+      "description": "コードの生成・修正を依頼します",
+      "models": ["code-model-a", "code-model-b"]
+    }
+  ]
+}

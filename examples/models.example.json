@@ -1,0 +1,11 @@
+{
+  "models": [{
+    "id": "local-a",
+    "model": "replace-with-api-model-id",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "keychain": {"service": "orca-local-llm", "account": "local-a"},
+    "headers": {"X-Client-Name": "Orca"},
+    "max_concurrent_requests": 1,
+    "tokens_per_second": null
+  }]
+}

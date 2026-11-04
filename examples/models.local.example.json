@@ -1,0 +1,16 @@
+{
+  "models": [{
+    "id": "local-gemma",
+    "model": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+    "base_url": "http://127.0.0.1:8080/v1",
+    "local_start": {
+      "command": "/absolute/path/to/venv/bin/mlx_vlm.server",
+      "args": [
+        "--model", "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+        "--host", "127.0.0.1",
+        "--port", "8080"
+      ],
+      "startup_timeout_seconds": 300
+    }
+  }]
+}

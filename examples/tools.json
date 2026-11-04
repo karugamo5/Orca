@@ -1,0 +1,8 @@
+{
+  "tools": [
+    {
+      "id": "generate_text",
+      "models": ["all"]
+    }
+  ]
+}

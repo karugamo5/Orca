@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "orca-local-mcp"
+dynamic = ["version"]
+description = "Local LLM MCP routing service for macOS"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["mcp==1.26.0", "httpx==0.28.1"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+]
+
+[project.urls]
+Repository = "https://github.com/karugamo5/Orca"
+Issues = "https://github.com/karugamo5/Orca/issues"
+
+[tool.hatch.version]
+path = "src/orca/__init__.py"
+
+[project.scripts]
+orca = "orca.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orca"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"third_party/THIRD_PARTY_NOTICES.md" = "orca/THIRD_PARTY_NOTICES.md"
+"LICENSE" = "orca/LICENSE"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "macos", "tools", "examples", "third_party", ".github",
+  "pyproject.toml", "requirements-lock.txt", "README.md", "LICENSE",
+  "setup.sh", "uninstall.sh"]
+exclude = ["__pycache__", "*.pyc", ".build", ".DS_Store", "docs", "AGENTS.md", "third_party/README.md",
+  "/tests/**", "/macos/Tests/**", "/tools/check_package.py", "/tools/check_swift_ipc.py",
+  "/tools/check_swift_ipc.sh", "/tools/ProtocolProbe.swift"]
