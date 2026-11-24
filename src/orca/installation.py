@@ -4,6 +4,7 @@ Tests inject a project-local user directory, builder, service controller and
 confirmation callback. Native launchctl/Keychain/Codex are not used by tests.
 """
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,8 @@ from .platforms.macos import InstanceLock, LoginItems, Paths, menu_launch_comman
 from .release_source import source_version
 
 MARKER = "orca-install-v1"
+SOCKET_LAYOUT = "support-run-v1"
+LEGACY_SOCKET_LAYOUT = "tmp-v1"
 
 
 def exclusive_write(path: Path, data: bytes):
@@ -166,6 +169,21 @@ class Installer:
         if self.bin.is_symlink() or (self.bin.exists() and self.bin.read_bytes() != self.wrapper()):
             raise OrcaError("config")
 
+    def legacy_socket_paths(self):
+        root = self.paths.root
+        digest = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()[:16]
+        return Paths(root, Path("/tmp") / f"orca-{os.getuid()}-{digest}")
+
+    def installed_service_paths(self):
+        if self.paths.runtime is not None or not self.marker.exists():
+            return self.paths
+        layout = json.loads(self.marker.read_bytes()).get("socket_layout", LEGACY_SOCKET_LAYOUT)
+        if layout == SOCKET_LAYOUT:
+            return self.paths
+        if layout == LEGACY_SOCKET_LAYOUT:
+            return self.legacy_socket_paths()
+        raise OrcaError("config")
+
     def build(self, release: Path):
         payload = release / "source"
         payload.mkdir()
@@ -181,38 +199,47 @@ class Installer:
         subprocess.run([python, "-m", "pip", "install", "--no-cache-dir", "--no-deps", "-r", str(payload / "requirements-lock.txt")], check=True, env=build_env)
         subprocess.run([python, "-m", "pip", "install", "--no-build-isolation", "--no-deps", str(payload)], check=True, env=build_env)
         self.stage = "checking ~/.config/orca support in the new release"
-        check = ("import sys; from pathlib import Path; from orca.platforms.macos import Paths; "
-                 "p = Paths(Path(sys.argv[1])); "
-                 "sys.exit((str(p.config), str(p.models), str(p.tools)) != tuple(sys.argv[2:]))")
+        check = ("import sys; from pathlib import Path; from orca.platforms.macos import Paths\n"
+                 "p = Paths(Path(sys.argv[1]))\n"
+                 "if (str(p.config), str(p.models), str(p.tools)) != tuple(sys.argv[2:5]):\n"
+                 "    sys.exit(1)\n"
+                 "if p.socket_dir == Path(sys.argv[5]):\n"
+                 "    sys.exit(0)\n"
+                 "sys.exit(2 if p.socket_dir == Path(sys.argv[6]) else 3)\n")
         result = subprocess.run([python, "-I", "-c", check, str(self.paths.root),
-                                 str(self.paths.config), str(self.paths.models), str(self.paths.tools)],
+                                 str(self.paths.config), str(self.paths.models), str(self.paths.tools),
+                                 str(Paths(self.paths.root).socket_dir), str(self.legacy_socket_paths().socket_dir)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=build_env)
-        if result.returncode:
+        if result.returncode == 3:
+            print("The selected release uses an unsupported Unix socket directory")
+            raise OrcaError("config")
+        if result.returncode not in (0, 2):
             print("The selected release does not support ~/.config/orca with tools.json. Use an updated release or ./setup.sh --source")
             raise OrcaError("config")
         self.stage = "building the new release"
         subprocess.run(["/bin/sh", str(payload / "tools" / "build_macos.sh")], check=True,
                        env={**build_env, "ORCA_PYTHON": python})
         shutil.copytree(payload / "macos" / ".build" / "artifacts" / "Orca.app", release / "Orca.app")
+        return SOCKET_LAYOUT if result.returncode == 0 else LEGACY_SOCKET_LAYOUT
 
     def service_control(self, operation):
-        import asyncio
         from .ipc import request
         from .cli import launch, stop
+        paths = self.installed_service_paths()
         async def action():
             if operation == "status":
                 try:
-                    await request(self.paths.socket, "snapshot")
+                    await request(paths.socket, "snapshot")
                     return True
                 except OrcaError as error:
                     if error.code == "stopped":
                         return False
                     raise
             if operation == "stop":
-                await stop(self.paths)
+                await stop(paths)
             elif operation == "launch":
                 # Invoke the installed Python, not the setup interpreter.
-                await launch(self.paths, executable=str(self.paths.root / "current" / "venv" / "bin" / "python"))
+                await launch(paths, executable=str(paths.root / "current" / "venv" / "bin" / "python"))
         return asyncio.run(action())
 
     def login_commands(self):
@@ -321,7 +348,12 @@ class Installer:
         release.mkdir(mode=0o700)
         try:
             self.stage = "building the new release"
-            self.builder(release)
+            socket_layout = self.builder(release) or SOCKET_LAYOUT
+            target_paths = self.paths
+            if self.paths.runtime is None and socket_layout == LEGACY_SOCKET_LAYOUT:
+                target_paths = self.legacy_socket_paths()
+            self.stage = "checking the Unix socket path length"
+            target_paths.validate_socket_paths()
             self.stage = "validating the installation and configuration"
             exclusive_write(release / "release.json", json.dumps({"format": MARKER, "release": release.name}).encode())
             self.preflight()
@@ -351,15 +383,21 @@ class Installer:
             load_config(self.paths.config)
             ToolRegistry(self.paths.tools).reload()
             if existing:
+                changing_socket_dir = self.installed_service_paths().socket_dir != target_paths.socket_dir
+                if changing_socket_dir and InstanceLock.is_held(root / "models.lock"):
+                    self.stage = "waiting for the model manager to be stopped before changing the socket directory"
+                    print("Stop Orca-managed models, quit the menu bar app, run orca stop, and wait for the idle model manager to exit before updating")
+                    raise OrcaError("unavailable")
                 self.stage = "checking the menu bar app"
                 menu_running = bool(self.menu_control("status"))
                 self.stage = "checking the Orca service"
                 running = bool(self.control("status"))
-                if running:
-                    print("Cancelling pending and running requests and stopping the service for the update")
+                if running or changing_socket_dir:
+                    if running:
+                        print("Cancelling pending and running requests and stopping the service for the update")
                     self.stage = "stopping the Orca service (up to 10 seconds)"
                     self.control("stop")
-                    stopped = True
+                    stopped = running
                 if menu_running:
                     self.stage = "stopping the menu bar app (up to 10 seconds)"
                     self.menu_control("stop")
@@ -398,7 +436,8 @@ class Installer:
             self.sync_login()
             self.stage = "writing the installation record"
             atomic_write(self.marker, json.dumps({"format": MARKER, "version": self.version,
-                         "user_home": str(self.user_home), "config_layout": "dot-config-v1"}).encode())
+                         "user_home": str(self.user_home), "config_layout": "dot-config-v1",
+                         "socket_layout": socket_layout}).encode())
             marker_changed = True
             if running:
                 restart_attempted = True
@@ -497,7 +536,7 @@ class Installer:
         self.menu_control("stop")
         self.stage = "stopping the local model manager"
         from .model_manager import shutdown_manager
-        asyncio.run(shutdown_manager(self.paths))
+        asyncio.run(shutdown_manager(self.installed_service_paths()))
         self.stage = "removing the Orca installation"
         if self.native:
             for label in self.agents.LABELS:
@@ -529,6 +568,10 @@ class Installer:
                 path.unlink()
         try:
             self.paths.config_dir.rmdir()
+        except OSError:
+            pass
+        try:
+            (root / "run").rmdir()
         except OSError:
             pass
         print("Orca removed. Error logs, Codex registration and PATH entries have been preserved")

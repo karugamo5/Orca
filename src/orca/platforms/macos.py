@@ -1,7 +1,6 @@
 """macOS boundaries: paths, single-instance locking and read-only Keychain."""
 import asyncio
 import fcntl
-import hashlib
 import os
 import stat
 from dataclasses import dataclass
@@ -27,10 +26,7 @@ class Paths:
 
     @property
     def socket_dir(self):
-        if self.runtime is not None:
-            return self.runtime
-        digest = hashlib.sha256(os.fsencode(self.root.resolve())).hexdigest()[:16]
-        return Path("/tmp") / f"orca-{os.getuid()}-{digest}"
+        return self.runtime if self.runtime is not None else self.root / "run"
 
     @property
     def socket(self):
@@ -75,7 +71,13 @@ class Paths:
             result += ["--runtime-dir", str(self.runtime)]
         return result
 
+    def validate_socket_paths(self):
+        # Darwin sockaddr_un.sun_path has 104 bytes including the terminator.
+        if any(len(os.fsencode(path)) > 103 for path in (self.socket, self.models_socket)):
+            raise OrcaError("config")
+
     def prepare(self):
+        self.validate_socket_paths()
         private_directory(self.root)
         private_directory(self.socket_dir)
 

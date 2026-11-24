@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import Darwin
 
 struct ModelRow: Decodable, Identifiable, Sendable {
@@ -229,10 +228,9 @@ struct SocketClient: MenuService, ToolSettingsService {
     }
 
     static func socketPath(home: String, runtime: String? = nil) -> String {
-        if let runtime { return URL(fileURLWithPath: runtime).appendingPathComponent("daemon.sock").path }
-        let resolved = URL(fileURLWithPath: home).resolvingSymlinksInPath().path
-        let digest = SHA256.hash(data: Data(resolved.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
-        return "/tmp/orca-\(getuid())-\(digest)/daemon.sock"
+        let directory = runtime.map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: home).appendingPathComponent("run")
+        return directory.appendingPathComponent("daemon.sock").path
     }
 
     // Blocking POSIX IO is isolated on a detached task; never blocks the UI actor.
